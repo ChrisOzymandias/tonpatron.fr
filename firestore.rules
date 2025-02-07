@@ -1,0 +1,92 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+        request.auth.token.email.matches('.*@tonpatron.fr$');
+    }
+
+    // Blog collection
+    match /blog/{articleId} {
+      // Tout le monde peut lire les articles
+      allow read: if true;
+      
+      // Seuls les admins peuvent créer/modifier/supprimer
+      allow create: if isAdmin() && 
+        request.resource.data.keys().hasAll(['title', 'content', 'category', 'createdAt', 'createdBy', 'slug', 'status', 'views']) &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.status in ['draft', 'published'] &&
+        request.resource.data.views is number &&
+        request.resource.data.createdAt is timestamp;
+        
+      allow update: if isAdmin() &&
+        request.resource.data.updatedAt is timestamp &&
+        request.resource.data.createdBy == resource.data.createdBy;
+        
+      allow delete: if isAdmin();
+      
+      // Sous-collections des articles
+      match /{document=**} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated() && request.auth.uid == userId;
+      allow create: if request.auth.uid == userId;
+      allow update: if request.auth.uid == userId;
+      allow delete: if request.auth.uid == userId;
+    }
+
+    // Companies collection
+    match /companies/{companyId} {
+      allow read: if true;
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && 
+        (resource.data.userId == request.auth.uid ||
+         resource.data.createdBy == request.auth.uid);
+      
+      match /reviews/{reviewId} {
+        allow read: if true;
+        allow create: if true;
+        allow update: if (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['verified', 'verifiedAt', 'verificationToken'])
+        ) || (
+          isAuthenticated() && resource.data.userId == request.auth.uid
+        );
+      }
+      
+      match /{document=**} {
+        allow read, write: if isAuthenticated();
+      }
+    }
+
+    // CompanyClaims collection
+    match /companyClaims/{claimId} {
+      allow read: if isAuthenticated() && 
+        (resource == null || resource.data.userId == request.auth.uid);
+      
+      function isValidClaim() {
+        return request.resource.data.userId == request.auth.uid &&
+               request.resource.data.status == 'pending' &&
+               request.resource.data.createdAt is timestamp &&
+               request.resource.data.updatedAt is timestamp &&
+               request.resource.data.companyId is string &&
+               request.resource.data.companyName is string &&
+               request.resource.data.companyPostalCode is string &&
+               request.resource.data.email is string;
+      }
+      
+      allow create: if isAuthenticated() && isValidClaim();
+      allow update: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid;
+    }
+  }
+}
